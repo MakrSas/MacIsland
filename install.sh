@@ -10,33 +10,22 @@ csrutil status | grep -q disabled || { echo "SIP must be disabled"; exit 1; }
 nvram boot-args 2>/dev/null | grep -q amfi_get_out_of_my_way || {
   echo "AMFI must be disabled: sudo nvram boot-args=\"amfi_get_out_of_my_way=0x1\" and reboot"; exit 1; }
 
-echo "[1/4] Enabling feature flags (sudo)"
-FF=/Library/Preferences/FeatureFlags/Domain
-sudo mkdir -p $FF
-sudo defaults write $FF/MenuBar.plist LiveActivitiesQFA -dict Enabled -bool true
-sudo defaults write $FF/MenuBar.plist MenuBarQFA -dict Enabled -bool true
-sudo defaults write $FF/ControlCenter.plist AVLiveActivity -dict Enabled -bool true
+echo "[1/4] Using the native 27.3 Live Activities support"
 
 echo "[2/4] Writing MenuBarAgent preferences"
-C="$HOME/Library/Containers/com.apple.MenuBarAgent/Data/Library/Preferences/com.apple.MenuBarAgent"
-for d in "$C" com.apple.MenuBarAgent com.apple.MenuBar; do
+C="$HOME/Library/Group Containers/com.apple.MenuBar/Library/Preferences/com.apple.MenuBar"
+for d in "$C"; do
   defaults write "$d" ShowSoftwareNotch -bool true
   defaults write "$d" EmulateCenterHUD -bool true
 done
+defaults write com.apple.campo SupportsIslandMitosis -bool true
 
 echo "[3/4] Building dylib"
 mkdir -p "$DIR"
 clang -arch arm64e -dynamiclib -o "$DIR/island.dylib" "$SRC/src/island.c" \
   -F/System/Library/PrivateFrameworks -framework CoreUtils -undefined dynamic_lookup
 codesign -f -s - "$DIR/island.dylib"
-cat > "$DIR/load.sh" <<SH
-#!/bin/bash
-launchctl setenv DYLD_INSERT_LIBRARIES "$DIR/island.dylib"
-killall MenuBarAgent
-sleep 3
-launchctl unsetenv DYLD_INSERT_LIBRARIES
-SH
-chmod +x "$DIR/load.sh"
+cp "$SRC/src/loader.py" "$DIR/loader.py"
 
 echo "[4/4] Installing LaunchAgent"
 mkdir -p "$(dirname "$AGENT")"
@@ -45,8 +34,10 @@ cat > "$AGENT" <<PL
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>com.macisland.loader</string>
-  <key>ProgramArguments</key><array><string>$DIR/load.sh</string></array>
+  <key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>$DIR/loader.py</string></array>
   <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$DIR/loader.log</string>
+  <key>StandardErrorPath</key><string>$DIR/loader-error.log</string>
 </dict></plist>
 PL
 launchctl bootout gui/$(id -u) "$AGENT" 2>/dev/null || true
